@@ -1,0 +1,31 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Agent Loop &amp; Token Burn Checker - free, runs in your browser | Kerbform</title><meta name="description" content="Paste a Claude Code or agent session log. See repeat file reads, re-run failing commands, ping-pong and edit-revert loops, with an estimated token count. Free, no signup, nothing uploaded."><link rel="stylesheet" href="/style.css">
+<style>textarea{width:100%;min-height:220px;font:13px/1.4 ui-monospace,Menlo,Consolas,monospace;padding:10px;border:1px solid #cfcfca;border-radius:6px;background:#fff}
+.row{display:flex;gap:10px;flex-wrap:wrap;margin:10px 0}button.btn{border:0;font:inherit;cursor:pointer}button.alt{background:#fff;color:#0b6e4f;border:1px solid #0b6e4f}
+.score{font-size:2.6rem;font-weight:700;line-height:1}.stats{display:flex;gap:24px;flex-wrap:wrap}.stats div{min-width:120px}
+table{width:100%;border-collapse:collapse;font-size:.92rem}td,th{text-align:left;padding:6px 4px;border-top:1px solid #eee;vertical-align:top}td code{word-break:break-all}
+.note{font-size:.85rem;color:#5b6670}.bad{color:#b3261e}.ok{color:#0b6e4f}</style></head>
+<body><header><a class="brand" href="/">Kerbform</a><nav><a href="/about.html">About</a><a href="/privacy.html">Privacy</a><a href="/terms.html">Terms</a><a href="/contact.html">Contact</a></nav></header><main>
+<h1>Agent Loop &amp; Token Burn Checker</h1>
+<p>Paste a Claude Code session (or any coding agent transcript) and see where it went in circles: files it kept re-reading, the same failing command run again and again, back-and-forth between two steps, and edits it undid.</p>
+<p class="note"><strong>Everything runs in your browser. Nothing is uploaded</strong>, no account, no tracking. Check the page source if you like.</p>
+<div class="card"><p><label for="log"><strong>Your session log</strong> - paste the terminal transcript, or a <code>.jsonl</code> file from <code>~/.claude/projects/</code></label></p>
+<textarea id="log" placeholder="⏺ Read(src/app.ts)&#10;⏺ Bash(npm test)&#10;  ⎿  Error ... exit code 1&#10;..."></textarea>
+<div class="row"><button class="btn" id="go">Check my session</button><button class="btn alt" id="sample">Load sample</button><label class="btn alt" style="cursor:pointer">Open file<input type="file" id="file" accept=".jsonl,.json,.txt,.log,.md" hidden></label></div></div>
+<div id="out" hidden></div>
+<p class="note">Token numbers are rough estimates (characters / 4), not your bill. Different models count differently.</p>
+</main><footer><p>&copy; 2026 Kerbform &middot; <a href="/privacy.html">Privacy</a> &middot; <a href="/terms.html">Terms</a> &middot; <a href="mailto:hello@kerbform.com">hello@kerbform.com</a></p></footer>
+<script src="checker.js"></script><script src="sample.js"></script><script>
+(function(){var $=function(i){return document.getElementById(i)};
+function esc(s){return String(s).replace(/[&<>"]/g,function(c){return{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]})}
+function n(x){return x.toLocaleString()}
+function run(){var r=TokenBurn.analyze($('log').value),o=$('out');o.hidden=false;
+if(!r.toolCalls){o.innerHTML='<div class="card"><p>Couldn\'t find any tool calls in that. Try the raw terminal output or a .jsonl session file.</p></div>';return}
+var h='<div class="card"><h2>Loop score: <span class="score '+(r.score>=40?'bad':'ok')+'">'+r.score+'</span>/100</h2><div class="stats"><div><strong>'+r.toolCalls+'</strong><br>tool calls</div><div><strong>~'+n(r.totalTokens)+'</strong><br>tokens in log (est.)</div><div><strong>~'+n(r.wastedTokens)+'</strong><br>spent on repeats (est.)</div><div><strong>'+Math.round(r.wastedShare*100)+'%</strong><br>of the session</div></div>';
+if(r.offenders.length){h+='<h3>Top offenders</h3><table><tr><th>What</th><th>Where</th><th>Times</th><th>~Tokens</th></tr>';
+r.offenders.slice(0,10).forEach(function(x){h+='<tr><td>'+esc(x.label)+'</td><td><code>'+esc(x.target)+'</code></td><td>'+x.count+'</td><td>'+n(x.wastedTokens)+'</td></tr>'});h+='</table>'}
+else h+='<p class="ok">No loops found. This session looks clean.</p>';
+h+='</div><div class="card"><h3>Want this stopped while it happens?</h3><p>TokenGuard is a small local hook for Claude Code that spots these loops and blocks them before they burn more tokens. Runs on your machine. $19, one-off.</p><p><a class="btn" href="https://labourchef.gumroad.com/l/tokenguard">Get TokenGuard - $19</a></p><p class="note">It cuts waste. It won\'t raise Anthropic\'s usage limits.</p></div>';
+o.innerHTML=h;o.scrollIntoView({behavior:'smooth'})}
+$('go').onclick=run;$('sample').onclick=function(){$('log').value=window.TB_SAMPLE;run()};
+$('file').onchange=function(e){var f=e.target.files[0];if(!f)return;var rd=new FileReader();rd.onload=function(){$('log').value=rd.result;run()};rd.readAsText(f)};})();
+</script></body></html>
