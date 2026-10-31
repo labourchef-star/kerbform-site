@@ -75,17 +75,27 @@
       if (e.tool === 'Bash' && e.error) (fails[e.arg] = fails[e.arg] || []).push(e);
       if (e.tool === 'Edit') (edits[e.arg] = edits[e.arg] || []).push(e);
     });
-    var offenders = [];
-    function waste(list) { return list.slice(1).reduce(function (s, e) { return s + e.tokens; }, 0); }
-    Object.keys(reads).forEach(function (p) { var l = reads[p]; if (l.length >= 3) offenders.push({ type: 'repeat-read', label: 'Read the same file', target: p, count: l.length, wastedTokens: waste(l) }); });
-    Object.keys(fails).forEach(function (c) { var l = fails[c]; if (l.length >= 2) offenders.push({ type: 'repeat-fail', label: 'Re-ran the same failing command', target: c, count: l.length, wastedTokens: waste(l) }); });
+    var offenders = [], wastedSet = {};
+    // each offender keeps the list of events it considers wasted; global total counts each event ONCE
+    function mark(list) { list.forEach(function (e) { wastedSet[e.i] = e; }); return list.reduce(function (s, e) { return s + e.tokens; }, 0); }
+    // repeat-read: only re-reads of a file that was NOT edited since the last read count as waste
+    Object.keys(reads).forEach(function (p) {
+      var l = reads[p]; if (l.length < 3) return;
+      var w = [];
+      for (var k = 1; k < l.length; k++) {
+        var prev = l[k - 1].i, cur = l[k].i, edited = (edits[p] || []).some(function (e) { return e.i > prev && e.i < cur; });
+        if (!edited) w.push(l[k]);
+      }
+      if (w.length) offenders.push({ type: 'repeat-read', label: 'Read the same file', target: p, count: l.length, wastedTokens: mark(w) });
+    });
+    Object.keys(fails).forEach(function (c) { var l = fails[c]; if (l.length >= 2) offenders.push({ type: 'repeat-fail', label: 'Re-ran the same failing command', target: c, count: l.length, wastedTokens: mark(l.slice(1)) }); });
     // edit-revert: an edit whose new_string equals an earlier edit's old_string on same file (text logs: same file edited >=4 times)
     Object.keys(edits).forEach(function (p) {
-      var l = edits[p], reverts = 0, wt = 0;
+      var l = edits[p], reverts = 0, w = [];
       for (var a = 0; a < l.length; a++) for (var b = a + 1; b < l.length; b++)
-        if (l[a].editOld != null && l[b].editNew === l[a].editOld && l[b].editOld === l[a].editNew) { reverts++; wt += l[b].tokens + l[a].tokens; break; }
-      if (reverts) offenders.push({ type: 'edit-revert', label: 'Edited then reverted', target: p, count: reverts, wastedTokens: wt });
-      else if (l[0].editOld == null && l.length >= 4) offenders.push({ type: 'edit-churn', label: 'Edited the same file over and over', target: p, count: l.length, wastedTokens: waste(l.slice(2)) });
+        if (l[a].editOld != null && l[b].editNew === l[a].editOld && l[b].editOld === l[a].editNew) { reverts++; w.push(l[a], l[b]); break; }
+      if (reverts) offenders.push({ type: 'edit-revert', label: 'Edited then reverted', target: p, count: reverts, wastedTokens: mark(w) });
+      else if (l[0].editOld == null && l.length >= 4) offenders.push({ type: 'edit-churn', label: 'Edited the same file over and over', target: p, count: l.length, wastedTokens: mark(l.slice(3)) });
     });
     // ping-pong: A,B,A,B... runs of alternating signatures (length >= 4)
     var sig = ev.map(function (e) { return e.tool + ' ' + e.arg; });
@@ -94,22 +104,22 @@
       var A = sig[i], B = sig[i + 1];
       if (A !== B && sig[i + 2] === A && sig[i + 3] === B) {
         var j = i + 4; while (j < sig.length && sig[j] === (((j - i) % 2) ? B : A)) j++;
-        var key = A + '  <->  ' + B, run = ev.slice(i + 2, j);
+        var key = A + '  <->  ' + B;
         pp[key] = pp[key] || { type: 'ping-pong', label: 'Bounced between two steps', target: key, count: 0, wastedTokens: 0 };
-        pp[key].count += Math.floor((j - i) / 2); pp[key].wastedTokens += run.reduce(function (s, e) { return s + e.tokens; }, 0);
+        pp[key].count += Math.floor((j - i) / 2); pp[key].wastedTokens += mark(ev.slice(i + 2, j));
         i = j - 1;
       } else i++;
     }
     Object.keys(pp).forEach(function (k) { offenders.push(pp[k]); });
     offenders.sort(function (a, b) { return b.wastedTokens - a.wastedTokens || b.count - a.count; });
-    // dedupe overlapping waste roughly by capping at total tool tokens
-    var toolTokens = ev.reduce(function (s, e) { return s + e.tokens; }, 0);
-    var wasted = Math.min(offenders.reduce(function (s, o) { return s + o.wastedTokens; }, 0), toolTokens, totalTokens);
+    // de-duplicated total: an action flagged by several loop types counts once
+    var wasted = Object.keys(wastedSet).reduce(function (s, k) { return s + wastedSet[k].tokens; }, 0);
+    wasted = Math.min(wasted, totalTokens);
     var share = totalTokens ? wasted / totalTokens : 0;
-    var repeatsCount = offenders.reduce(function (s, o) { return s + o.count; }, 0);
-    var score = Math.min(100, Math.round(share * 120 + Math.min(40, repeatsCount * 2)));
-    if (!offenders.length) score = 0;
-    return { toolCalls: ev.length, totalTokens: totalTokens, wastedTokens: wasted, wastedShare: share, score: score, offenders: offenders };
+    var wastedCalls = Object.keys(wastedSet).length;
+    // conservative score: mostly token share, small bump for number of distinct wasted calls; capped at 95
+    var score = offenders.length ? Math.min(95, Math.round(share * 75 + Math.min(20, wastedCalls * 1.5))) : 0;
+    return { toolCalls: ev.length, totalTokens: totalTokens, wastedTokens: wasted, wastedShare: share, wastedCalls: wastedCalls, score: score, offenders: offenders };
   }
   var api = { analyze: analyze, parse: parse };
   if (typeof module !== 'undefined' && module.exports) module.exports = api; else root.TokenBurn = api;
